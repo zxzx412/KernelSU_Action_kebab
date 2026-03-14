@@ -8,7 +8,8 @@ on:
 jobs:
   build:
     name: Build Kernel by ${{ github.actor }}
-    runs-on: ubuntu-latest
+    # 修复点1: 锁定使用 Ubuntu 22.04，避免 Ubuntu 24.04 的软件包依赖冲突
+    runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -63,8 +64,9 @@ jobs:
         echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
         sudo apt-get update
-        # 添加 gcc-aarch64-linux-gnu 用于提供汇编器 (as) 和链接器 (ld)
-        sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 libx11-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 libncurses-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+        # 修复点2: 使用 binutils 替代 gcc 交叉编译套件，避免依赖冲突
+        # binutils 提供 as (汇编器) 和 ld (链接器)，是 Clang 编译所必需的
+        sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 libx11-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 libncurses-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
         mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
     - name: Download Clang-aosp
@@ -245,7 +247,7 @@ jobs:
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
         fi
         
-        # --- 修复：设置 CLANG_TRIPLE 和 CROSS_COMPILE ---
+        # --- 设置 CLANG_TRIPLE 和 CROSS_COMPILE ---
         # 根据架构设置 CLANG_TRIPLE
         case "${{ env.ARCH }}" in
           arm64) CLANG_TRIPLE="aarch64-linux-gnu-" ;;
@@ -256,23 +258,23 @@ jobs:
         esac
         export CLANG_TRIPLE
 
-        # 如果没有指定 GCC，则默认使用系统安装的工具链作为 CROSS_COMPILE
-        # 这样 Clang 就能找到汇编器 (as) 和链接器 (ld)
-        if [ -z "${{ env.GCC_64 }}" ]; then
-            echo "未检测到自定义 GCC，使用系统工具链作为 CROSS_COMPILE"
+        # 设置 CROSS_COMPILE
+        # 如果环境变量中有 GCC_64 (表示用户配置了自定义GCC)，则使用之
+        # 否则使用系统自带的 binutils (通过 apt 安装的 binutils-aarch64-linux-gnu)
+        if [ ! -z "${{ env.GCC_64 }}" ]; then
+            export CROSS_COMPILE=${{ env.GCC_64 }}
+        else
+            echo "使用系统默认工具链作为 CROSS_COMPILE"
             if [ "${{ env.ARCH }}" = "arm64" ]; then
                 export CROSS_COMPILE=aarch64-linux-gnu-
             elif [ "${{ env.ARCH }}" = "arm" ]; then
                 export CROSS_COMPILE=arm-linux-gnueabi-
             fi
-        else
-            # 如果之前步骤设置了 GCC_64 环境变量，则应用它
-            export ${{ env.GCC_64 }}
         fi
         
         # 应用 32位 GCC 设置（如果有）
         if [ ! -z "${{ env.GCC_32 }}" ]; then
-            export ${{ env.GCC_32 }}
+            export CROSS_COMPILE_ARM32=${{ env.GCC_32 }}
         fi
 
         # 修复：添加 KCFLAGS="-fcommon" 以解决 GCC 10+ 的兼容性问题
