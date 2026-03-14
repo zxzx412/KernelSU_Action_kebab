@@ -70,23 +70,21 @@ jobs:
       if: env.USE_CUSTOM_CLANG != 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir -p clang-aosp/bin
+        mkdir -p clang-aosp
         
         if [[ "${{ env.CLANG_BRANCH }}" == *"kernel-build"* ]]; then
           echo "检测到 Kernel Build 分支，使用 kernel/prebuilts/build-tools 仓库..."
           git clone https://android.googlesource.com/kernel/prebuilts/build-tools -b ${{ env.CLANG_BRANCH }} kernel-build-tools --depth=1
           
-          # 优先检查 llvm-bin，其次 linux-x86/bin
-          if [ -d "kernel-build-tools/llvm-bin" ]; then
-            cp -r kernel-build-tools/llvm-bin/* clang-aosp/bin/
-          elif [ -d "kernel-build-tools/linux-x86/bin" ]; then
-            cp -r kernel-build-tools/linux-x86/bin/* clang-aosp/bin/
-          elif [ -d "kernel-build-tools/clang-${{ env.CLANG_VERSION }}" ]; then
-            cp -r kernel-build-tools/clang-${{ env.CLANG_VERSION }}/* clang-aosp/
+          # 查找 clang 所在目录
+          CLANG_BIN=$(find kernel-build-tools -name 'clang' -type f | head -1)
+          if [ -n "$CLANG_BIN" ]; then
+              BIN_DIR=$(dirname "$CLANG_BIN")
+              echo "找到 clang 在: $BIN_DIR"
+              cp -r "$BIN_DIR" clang-aosp/bin
           else
-            echo "错误：在 build-tools 中未找到 Clang 二进制文件"
-            find kernel-build-tools -name "clang" -type f
-            exit 1
+              echo "错误：未找到 clang"
+              exit 1
           fi
           
         else
@@ -96,9 +94,21 @@ jobs:
           
           tar -C clang-aosp/ -zxf clang.tar.gz
           
-          if [ -d "clang-aosp/clang-${{ env.CLANG_VERSION }}" ]; then
-            mv clang-aosp/clang-${{ env.CLANG_VERSION }}/* clang-aosp/
-            rm -rf clang-aosp/clang-${{ env.CLANG_VERSION }}
+          # 智能查找 clang 二进制文件并移动到正确位置
+          # 脚本预期路径: clang-aosp/bin/clang
+          if [ ! -f "clang-aosp/bin/clang" ]; then
+              echo "clang 不在根 bin 目录，搜索子目录..."
+              CLANG_BIN=$(find clang-aosp -name 'clang' -type f -path '*/bin/*' | head -1)
+              if [ -n "$CLANG_BIN" ]; then
+                  FOUND_BIN_DIR=$(dirname "$CLANG_BIN")
+                  echo "找到 bin 目录: $FOUND_BIN_DIR"
+                  # 将找到的 bin 目录内容移动到 clang-aosp/bin
+                  mkdir -p clang-aosp/bin
+                  mv $FOUND_BIN_DIR/* clang-aosp/bin/
+              else
+                  echo "错误：压缩包中未找到 clang 二进制文件"
+                  exit 1
+              fi
           fi
         fi
         
@@ -242,26 +252,43 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         
-        # --- 关键修复：确保 ld.lld 存在 ---
-        # 进入 bin 目录检查并创建符号链接
+        # --- 最终修复：强制修复 ld.lld ---
+        # 进入工具链目录
         cd $GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin
+        echo "正在检查工具链目录内容:"
+        ls -la
+        
+        # 如果 ld.lld 不存在
         if [ ! -f ld.lld ]; then
+            echo "ld.lld 不存在，尝试修复..."
+            # 尝试链接 lld
             if [ -f lld ]; then
                 ln -sf lld ld.lld
-                echo "已创建符号链接: lld -> ld.lld"
+                echo "已链接: lld -> ld.lld"
+            # 尝试链接 ld.lld-*
+            elif ls ld.lld-* 1> /dev/null 2>&1; then
+                LLD_VER=$(ls ld.lld-* | head -1)
+                ln -sf $LLD_VER ld.lld
+                echo "已链接: $LLD_VER -> ld.lld"
+            # 尝试链接 lld-*
+            elif ls lld-* 1> /dev/null 2>&1; then
+                LLD_VER=$(ls lld-* | head -1)
+                ln -sf $LLD_VER ld.lld
+                echo "已链接: $LLD_VER -> ld.lld"
             else
-                echo "警告: 工具链中缺少 lld，尝试使用 ld."
-                # 如果没有 lld，回退使用系统 ld
-                export LD=ld
+                echo "警告: 未找到 lld 相关文件，编译可能会失败。"
             fi
         fi
-        # 确保 llvm-ar 存在
-        if [ ! -f llvm-ar ]; then
-            if [ -f llvm-ar-12 ] || [ -f llvm-ar-11 ]; then
-                ln -sf llvm-ar-* llvm-ar
-            fi
+        
+        # 再次检查
+        if [ -f ld.lld ]; then
+            echo "ld.lld 已就绪。"
+        else
+            echo "错误: ld.lld 仍缺失。"
+            # exit 1 # 可选：直接退出
         fi
-        # 返回内核源码目录
+        
+        # 返回内核目录
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
 
         export KBUILD_BUILD_HOST=Github-Action
@@ -299,10 +326,11 @@ jobs:
         fi
 
         echo "Final CC: clang"
+        echo "Final LD: ld.lld"
         echo "Final CROSS_COMPILE: $CROSS_COMPILE"
         echo "Final CLANG_TRIPLE: $CLANG_TRIPLE"
         
-        # 显式指定 LD=ld.lld
+        # 编译命令
         make -j$(nproc --all) CC=clang LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
