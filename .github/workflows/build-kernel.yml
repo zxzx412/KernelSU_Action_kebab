@@ -102,6 +102,20 @@ jobs:
         fi
         
         chmod -R +x clang-aosp/bin
+        
+        # --- 关键修复：确保 ld.lld 存在 ---
+        cd clang-aosp/bin
+        # 如果 ld.lld 不存在，尝试从 lld 创建链接
+        if [ ! -f ld.lld ]; then
+            if [ -f lld ]; then
+                ln -s lld ld.lld
+                echo "Created symlink: lld -> ld.lld"
+            else
+                echo "Warning: lld not found in toolchain, linking might fail."
+            fi
+        fi
+        # 确保 llvm-ar 等工具存在（部分内核需要）
+        ls -la | grep -E "clang|lld|ar"
 
     - name: Download Custom-Clang
       if: env.USE_CUSTOM_CLANG == 'true'
@@ -129,7 +143,6 @@ jobs:
             mkdir gcc-64
             wget -O gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
             tar -C gcc-64/ -zxvf gcc-aarch64.tar.gz
-            # 修复点：只存储路径前缀，不要包含变量名
             echo "GCC_64_PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-" >> $GITHUB_ENV
         fi
 
@@ -137,7 +150,6 @@ jobs:
             mkdir gcc-32
             wget -O gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
             tar -C gcc-32/ -zxvf gcc-arm.tar.gz
-            # 修复点：只存储路径前缀
             echo "GCC_32_PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
         fi
 
@@ -159,7 +171,6 @@ jobs:
               mkdir gcc-64
               unzip gcc-64.zip -d gcc-64/
           fi
-          # 尝试自动检测前缀
           PREFIX=$(ls gcc-64/bin/ | grep gcc | head -1 | sed 's/gcc$//')
           echo "GCC_64_PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/$PREFIX" >> $GITHUB_ENV
         fi
@@ -260,13 +271,11 @@ jobs:
         esac
         export CLANG_TRIPLE
 
-        # 修复点：正确设置 CROSS_COMPILE
-        # 优先使用自定义 GCC (GCC_64_PATH)
+        # 设置 CROSS_COMPILE
         if [ ! -z "${{ env.GCC_64_PATH }}" ]; then
             echo "使用自定义 GCC: ${{ env.GCC_64_PATH }}"
             export CROSS_COMPILE="${{ env.GCC_64_PATH }}"
         else
-            # 否则使用系统 binutils (仅提供汇编和链接，配合 Clang)
             echo "使用系统工具链作为 CROSS_COMPILE"
             if [ "${{ env.ARCH }}" = "arm64" ]; then
                 export CROSS_COMPILE=aarch64-linux-gnu-
@@ -275,7 +284,6 @@ jobs:
             fi
         fi
         
-        # 设置 32位 CROSS_COMPILE (如果需要)
         if [ ! -z "${{ env.GCC_32_PATH }}" ]; then
             export CROSS_COMPILE_ARM32="${{ env.GCC_32_PATH }}"
         fi
@@ -283,14 +291,15 @@ jobs:
         echo "Final CC: clang"
         echo "Final CROSS_COMPILE: $CROSS_COMPILE"
         echo "Final CLANG_TRIPLE: $CLANG_TRIPLE"
-
-        # 修复：添加 HOSTCC=gcc HOSTCFLAGS="-fcommon" 以解决 OpenSSL 和 GCC 兼容性问题
-        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
+        
+        # 修复点：显式指定 LD=ld.lld，并添加 LLVM 工具支持
+        # 使用 HOSTCC=gcc HOSTCFLAGS="-fcommon" 解决主机工具编译问题
+        make -j$(nproc --all) CC=clang LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
-            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC="ccache clang" LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         else
-            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC=clang LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         fi
 
     - name: Check a kernel output files
