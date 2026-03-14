@@ -73,19 +73,14 @@ jobs:
         mkdir -p clang-aosp/bin
         
         # 智能判断分支来源
-        # 如果分支名包含 "kernel-build"，则使用 kernel/prebuilts/build-tools 仓库
         if [[ "${{ env.CLANG_BRANCH }}" == *"kernel-build"* ]]; then
           echo "检测到 Kernel Build 分支，使用 kernel/prebuilts/build-tools 仓库..."
           git clone https://android.googlesource.com/kernel/prebuilts/build-tools -b ${{ env.CLANG_BRANCH }} kernel-build-tools --depth=1
           
-          # 尝试从常见路径复制 Clang 文件
-          # 路径1: llvm-bin (常见于较新的构建工具)
           if [ -d "kernel-build-tools/llvm-bin" ]; then
             cp -r kernel-build-tools/llvm-bin/* clang-aosp/bin/
-          # 路径2: linux-x86/bin (常见于旧版构建工具)
           elif [ -d "kernel-build-tools/linux-x86/bin" ]; then
             cp -r kernel-build-tools/linux-x86/bin/* clang-aosp/bin/
-          # 路径3: 根目录下的 clang-r*
           elif [ -d "kernel-build-tools/clang-${{ env.CLANG_VERSION }}" ]; then
             cp -r kernel-build-tools/clang-${{ env.CLANG_VERSION }}/* clang-aosp/
           else
@@ -95,24 +90,15 @@ jobs:
           fi
           
         else
-          # 否则使用标准的 platform/prebuilts/clang 仓库
           echo "使用标准 AOSP Prebuilts Clang 仓库..."
-          # 尝试 master 分支，如果失败尝试 aosp-master
           wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${{ env.CLANG_VERSION }}.tar.gz -O clang.tar.gz || \
           wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/aosp-master/clang-${{ env.CLANG_VERSION }}.tar.gz -O clang.tar.gz
           
           tar -C clang-aosp/ -zxf clang.tar.gz
           
-          # 处理嵌套目录
           if [ -d "clang-aosp/clang-${{ env.CLANG_VERSION }}" ]; then
             mv clang-aosp/clang-${{ env.CLANG_VERSION }}/* clang-aosp/
             rm -rf clang-aosp/clang-${{ env.CLANG_VERSION }}
-          fi
-          # 确保 bin 目录存在
-          if [ ! -d "clang-aosp/bin" ]; then
-             # 有些版本直接解压在根目录，需要创建 bin 并移动（极少见，视具体情况而定）
-             # 通常 clang-aosp/bin 已经存在
-             echo "bin directory check passed or fixed."
           fi
         fi
         
@@ -257,11 +243,25 @@ jobs:
           export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
         fi
-        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+        
+        # --- 修复重点：设置 CLANG_TRIPLE ---
+        # 根据架构自动设置 CLANG_TRIPLE，这是 Android Clang 编译内核所必需的
+        case "${{ env.ARCH }}" in
+          arm64) CLANG_TRIPLE="aarch64-linux-gnu-" ;;
+          arm)   CLANG_TRIPLE="arm-linux-gnueabi-" ;;
+          x86_64) CLANG_TRIPLE="x86_64-linux-gnu-" ;;
+          i386)  CLANG_TRIPLE="i386-linux-gnu-" ;;
+          *)     CLANG_TRIPLE="${{ env.ARCH }}-linux-gnu-" ;;
+        esac
+        export CLANG_TRIPLE
+        
+        # 将 CLANG_TRIPLE 传递给 make 命令
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+        
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
-            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
+            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
         else
-            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
+            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
         fi
 
     - name: Check a kernel output files
