@@ -76,6 +76,7 @@ jobs:
           echo "检测到 Kernel Build 分支，使用 kernel/prebuilts/build-tools 仓库..."
           git clone https://android.googlesource.com/kernel/prebuilts/build-tools -b ${{ env.CLANG_BRANCH }} kernel-build-tools --depth=1
           
+          # 优先检查 llvm-bin，其次 linux-x86/bin
           if [ -d "kernel-build-tools/llvm-bin" ]; then
             cp -r kernel-build-tools/llvm-bin/* clang-aosp/bin/
           elif [ -d "kernel-build-tools/linux-x86/bin" ]; then
@@ -102,20 +103,6 @@ jobs:
         fi
         
         chmod -R +x clang-aosp/bin
-        
-        # --- 关键修复：确保 ld.lld 存在 ---
-        cd clang-aosp/bin
-        # 如果 ld.lld 不存在，尝试从 lld 创建链接
-        if [ ! -f ld.lld ]; then
-            if [ -f lld ]; then
-                ln -s lld ld.lld
-                echo "Created symlink: lld -> ld.lld"
-            else
-                echo "Warning: lld not found in toolchain, linking might fail."
-            fi
-        fi
-        # 确保 llvm-ar 等工具存在（部分内核需要）
-        ls -la | grep -E "clang|lld|ar"
 
     - name: Download Custom-Clang
       if: env.USE_CUSTOM_CLANG == 'true'
@@ -254,6 +241,29 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
+        
+        # --- 关键修复：确保 ld.lld 存在 ---
+        # 进入 bin 目录检查并创建符号链接
+        cd $GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin
+        if [ ! -f ld.lld ]; then
+            if [ -f lld ]; then
+                ln -sf lld ld.lld
+                echo "已创建符号链接: lld -> ld.lld"
+            else
+                echo "警告: 工具链中缺少 lld，尝试使用 ld."
+                # 如果没有 lld，回退使用系统 ld
+                export LD=ld
+            fi
+        fi
+        # 确保 llvm-ar 存在
+        if [ ! -f llvm-ar ]; then
+            if [ -f llvm-ar-12 ] || [ -f llvm-ar-11 ]; then
+                ln -sf llvm-ar-* llvm-ar
+            fi
+        fi
+        # 返回内核源码目录
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
         if [ ! -z ${{ env.KSU_EXPECTED_SIZE }} ] && [ ! -z ${{ env.KSU_EXPECTED_HASH }} ]; then
@@ -292,8 +302,7 @@ jobs:
         echo "Final CROSS_COMPILE: $CROSS_COMPILE"
         echo "Final CLANG_TRIPLE: $CLANG_TRIPLE"
         
-        # 修复点：显式指定 LD=ld.lld，并添加 LLVM 工具支持
-        # 使用 HOSTCC=gcc HOSTCFLAGS="-fcommon" 解决主机工具编译问题
+        # 显式指定 LD=ld.lld
         make -j$(nproc --all) CC=clang LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
