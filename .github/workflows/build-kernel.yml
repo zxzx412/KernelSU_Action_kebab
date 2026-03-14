@@ -63,7 +63,6 @@ jobs:
         echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
         sudo apt-get update
-        # 修复重点：移除已废弃的 lib32ncurses5-dev 和 lib32z-dev，使用 libncurses-dev 替代
         sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 libx11-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 libncurses-dev
         mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
@@ -72,8 +71,14 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         mkdir clang-aosp
-        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${{ env.CLANG_BRANCH }}/clang-${{ env.CLANG_VERSION }}.tar.gz
+        # 修复点1: 强制使用 master 分支，因为 CLANG_BRANCH (如 master-kernel-build-2022) 在此仓库中不存在
+        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${{ env.CLANG_VERSION }}.tar.gz
         tar -C clang-aosp/ -zxvf clang-${{ env.CLANG_VERSION }}.tar.gz
+        # 修复点2: Google下载的tar包内通常包含 clang-rxxxxx 子目录，需将文件移到外层以匹配后续编译路径
+        if [ -d "clang-aosp/clang-${{ env.CLANG_VERSION }}" ]; then
+          mv clang-aosp/clang-${{ env.CLANG_VERSION }}/* clang-aosp/
+          rm -rf clang-aosp/clang-${{ env.CLANG_VERSION }}
+        fi
 
     - name: Download Custom-Clang
       if: env.USE_CUSTOM_CLANG == 'true'
