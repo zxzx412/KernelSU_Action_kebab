@@ -8,7 +8,6 @@ on:
 jobs:
   build:
     name: Build Kernel by ${{ github.actor }}
-    # 锁定使用 Ubuntu 22.04
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
     env:
@@ -64,7 +63,6 @@ jobs:
         echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
         sudo apt-get update
-        # 安装必要依赖，使用 binutils 提供汇编器和链接器
         sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 libx11-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 libncurses-dev binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
         mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
@@ -74,7 +72,6 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace
         mkdir -p clang-aosp/bin
         
-        # 智能判断分支来源
         if [[ "${{ env.CLANG_BRANCH }}" == *"kernel-build"* ]]; then
           echo "检测到 Kernel Build 分支，使用 kernel/prebuilts/build-tools 仓库..."
           git clone https://android.googlesource.com/kernel/prebuilts/build-tools -b ${{ env.CLANG_BRANCH }} kernel-build-tools --depth=1
@@ -132,14 +129,16 @@ jobs:
             mkdir gcc-64
             wget -O gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
             tar -C gcc-64/ -zxvf gcc-aarch64.tar.gz
-            echo "GCC_64=CROSS_COMPILE=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-" >> $GITHUB_ENV
+            # 修复点：只存储路径前缀，不要包含变量名
+            echo "GCC_64_PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-" >> $GITHUB_ENV
         fi
 
         if [ ${{ env.ENABLE_GCC_ARM32 }} = true ]; then
             mkdir gcc-32
             wget -O gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
             tar -C gcc-32/ -zxvf gcc-arm.tar.gz
-            echo "GCC_32=CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
+            # 修复点：只存储路径前缀
+            echo "GCC_32_PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
         fi
 
     - name: Download Custom-Gcc
@@ -149,7 +148,7 @@ jobs:
         if [ ${{ env.USE_CUSTOM_GCC_64 }} = true ]; then
           if [[ ${{ env.CUSTOM_GCC_64_SOURCE }} =~ git ]]; then
               if [[ ${{ env.CUSTOM_GCC_64_SOURCE }} == *'.tar.gz' ]]; then
-                wget -O gcc-64.tar.gz ${{ env.CUSTOM_CLANG_SOURCE }}
+                wget -O gcc-64.tar.gz ${{ env.CUSTOM_GCC_64_SOURCE }}
                 mkdir gcc-64
                 tar -C gcc-64/ -zxvf gcc-64.tar.gz
               else
@@ -160,12 +159,15 @@ jobs:
               mkdir gcc-64
               unzip gcc-64.zip -d gcc-64/
           fi
+          # 尝试自动检测前缀
+          PREFIX=$(ls gcc-64/bin/ | grep gcc | head -1 | sed 's/gcc$//')
+          echo "GCC_64_PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/$PREFIX" >> $GITHUB_ENV
         fi
 
-        if [ ${{ env.USE_CUSTOM_GCC_64 }} = true ]; then
+        if [ ${{ env.USE_CUSTOM_GCC_32 }} = true ]; then
           if [[ ${{ env.CUSTOM_GCC_32_SOURCE }} =~ git ]]; then
               if [[ ${{ env.CUSTOM_GCC_32_SOURCE }} == *'.tar.gz' ]]; then
-                wget -O gcc-32.tar.gz ${{ env.CUSTOM_CLANG_SOURCE }}
+                wget -O gcc-32.tar.gz ${{ env.CUSTOM_GCC_32_SOURCE }}
                 mkdir gcc-32
                 tar -C gcc-32/ -zxvf gcc-32.tar.gz
               else
@@ -176,6 +178,8 @@ jobs:
             mkdir gcc-32
             unzip gcc-32.zip -d gcc-32/
           fi
+          PREFIX=$(ls gcc-32/bin/ | grep gcc | head -1 | sed 's/gcc$//')
+          echo "GCC_32_PATH=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/$PREFIX" >> $GITHUB_ENV
         fi
 
     - name: Download mkbootimg tools
@@ -256,11 +260,14 @@ jobs:
         esac
         export CLANG_TRIPLE
 
-        # 设置 CROSS_COMPILE
-        if [ ! -z "${{ env.GCC_64 }}" ]; then
-            export CROSS_COMPILE=${{ env.GCC_64 }}
+        # 修复点：正确设置 CROSS_COMPILE
+        # 优先使用自定义 GCC (GCC_64_PATH)
+        if [ ! -z "${{ env.GCC_64_PATH }}" ]; then
+            echo "使用自定义 GCC: ${{ env.GCC_64_PATH }}"
+            export CROSS_COMPILE="${{ env.GCC_64_PATH }}"
         else
-            echo "使用系统默认工具链作为 CROSS_COMPILE"
+            # 否则使用系统 binutils (仅提供汇编和链接，配合 Clang)
+            echo "使用系统工具链作为 CROSS_COMPILE"
             if [ "${{ env.ARCH }}" = "arm64" ]; then
                 export CROSS_COMPILE=aarch64-linux-gnu-
             elif [ "${{ env.ARCH }}" = "arm" ]; then
@@ -268,13 +275,16 @@ jobs:
             fi
         fi
         
-        if [ ! -z "${{ env.GCC_32 }}" ]; then
-            export CROSS_COMPILE_ARM32=${{ env.GCC_32 }}
+        # 设置 32位 CROSS_COMPILE (如果需要)
+        if [ ! -z "${{ env.GCC_32_PATH }}" ]; then
+            export CROSS_COMPILE_ARM32="${{ env.GCC_32_PATH }}"
         fi
 
-        # 修复关键：添加 HOSTCFLAGS="-fcommon" 和 HOSTCC=gcc
-        # HOSTCFLAGS="-fcommon" 解决 scripts/dtc/dtc 的 multiple definition 错误
-        # HOSTCC=gcc 确保主机工具使用系统 GCC 编译，而非 Clang
+        echo "Final CC: clang"
+        echo "Final CROSS_COMPILE: $CROSS_COMPILE"
+        echo "Final CLANG_TRIPLE: $CLANG_TRIPLE"
+
+        # 修复：添加 HOSTCC=gcc HOSTCFLAGS="-fcommon" 以解决 OpenSSL 和 GCC 兼容性问题
         make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
