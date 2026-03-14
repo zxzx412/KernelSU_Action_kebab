@@ -71,10 +71,10 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         mkdir clang-aosp
-        # 修复点1: 强制使用 master 分支，因为 CLANG_BRANCH (如 master-kernel-build-2022) 在此仓库中不存在
-        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${{ env.CLANG_VERSION }}.tar.gz
+        # 修复：AOSP 的预编译 Clang 仓库主分支名为 aosp-master
+        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/aosp-master/clang-${{ env.CLANG_VERSION }}.tar.gz
         tar -C clang-aosp/ -zxvf clang-${{ env.CLANG_VERSION }}.tar.gz
-        # 修复点2: Google下载的tar包内通常包含 clang-rxxxxx 子目录，需将文件移到外层以匹配后续编译路径
+        # 如果解压后包含版本号子目录，则移动文件到外层
         if [ -d "clang-aosp/clang-${{ env.CLANG_VERSION }}" ]; then
           mv clang-aosp/clang-${{ env.CLANG_VERSION }}/* clang-aosp/
           rm -rf clang-aosp/clang-${{ env.CLANG_VERSION }}
