@@ -63,7 +63,8 @@ jobs:
         echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
         sudo apt-get update
-        sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 libx11-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 libncurses-dev
+        # 添加 gcc-aarch64-linux-gnu 用于提供汇编器 (as) 和链接器 (ld)
+        sudo apt-get install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 libx11-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 libncurses-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
         mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
     - name: Download Clang-aosp
@@ -244,8 +245,8 @@ jobs:
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
         fi
         
-        # --- 修复重点：设置 CLANG_TRIPLE ---
-        # 根据架构自动设置 CLANG_TRIPLE，这是 Android Clang 编译内核所必需的
+        # --- 修复：设置 CLANG_TRIPLE 和 CROSS_COMPILE ---
+        # 根据架构设置 CLANG_TRIPLE
         case "${{ env.ARCH }}" in
           arm64) CLANG_TRIPLE="aarch64-linux-gnu-" ;;
           arm)   CLANG_TRIPLE="arm-linux-gnueabi-" ;;
@@ -254,14 +255,33 @@ jobs:
           *)     CLANG_TRIPLE="${{ env.ARCH }}-linux-gnu-" ;;
         esac
         export CLANG_TRIPLE
+
+        # 如果没有指定 GCC，则默认使用系统安装的工具链作为 CROSS_COMPILE
+        # 这样 Clang 就能找到汇编器 (as) 和链接器 (ld)
+        if [ -z "${{ env.GCC_64 }}" ]; then
+            echo "未检测到自定义 GCC，使用系统工具链作为 CROSS_COMPILE"
+            if [ "${{ env.ARCH }}" = "arm64" ]; then
+                export CROSS_COMPILE=aarch64-linux-gnu-
+            elif [ "${{ env.ARCH }}" = "arm" ]; then
+                export CROSS_COMPILE=arm-linux-gnueabi-
+            fi
+        else
+            # 如果之前步骤设置了 GCC_64 环境变量，则应用它
+            export ${{ env.GCC_64 }}
+        fi
         
-        # 将 CLANG_TRIPLE 传递给 make 命令
-        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+        # 应用 32位 GCC 设置（如果有）
+        if [ ! -z "${{ env.GCC_32 }}" ]; then
+            export ${{ env.GCC_32 }}
+        fi
+
+        # 修复：添加 KCFLAGS="-fcommon" 以解决 GCC 10+ 的兼容性问题
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
-            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
+            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         else
-            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
+            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         fi
 
     - name: Check a kernel output files
