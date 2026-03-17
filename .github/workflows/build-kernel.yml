@@ -577,28 +577,26 @@ jobs:
         make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
         # 强制禁用 CC_WERROR（防止 defconfig 覆盖）
-        EXTRA_KCFLAGS=""
         if [ ${{ env.DISABLE_CC_WERROR }} = true ]; then
             echo "禁用编译器 -Werror 标志..."
-            EXTRA_KCFLAGS="-Wno-error"
             sed -i 's/CONFIG_CC_WERROR=y/# CONFIG_CC_WERROR is not set/' out/.config
-            
-            # 在顶层 Makefile 中全局禁用 -Werror
-            echo "在顶层 Makefile 中全局禁用 -Werror..."
-            sed -i 's/KBUILD_CFLAGS.*-Werror/& -Wno-error/g' Makefile
-            sed -i '/^KBUILD_CFLAGS/a KBUILD_CFLAGS += -Wno-error' Makefile
             
             # 移除所有子目录 Makefile 中的 -Werror 标志
             echo "移除子目录 Makefile 中的 -Werror..."
             find drivers/oneplus -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} \; 2>/dev/null || true
-            find . -path ./out -prune -o -type f -name "Makefile" -exec sed -i 's/subdir-ccflags-y.*-Werror/# &/g' {} \; 2>/dev/null || true
+            find drivers -type f -name "Makefile" -exec sed -i 's/subdir-ccflags-y.*-Werror/# &/g' {} \; 2>/dev/null || true
+            
+            # 导出环境变量强制禁用 -Werror
+            export KCFLAGS="-Wno-error"
+            export KBUILD_CFLAGS_KERNEL="-Wno-error"
+            export KBUILD_CFLAGS_MODULE="-Wno-error"
         fi
         
         # 编译内核
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
-            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="$EXTRA_KCFLAGS" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="-Wno-error" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         else
-            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="$EXTRA_KCFLAGS" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="-Wno-error" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         fi
 
     - name: Check a kernel output files
