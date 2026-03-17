@@ -1,5 +1,12 @@
 name: Build Kernel
 on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  
   watch:
     types: [started]
 
@@ -420,18 +427,6 @@ jobs:
         fi
         
         # app_profile.c 的 seccomp_filter_release 已在上面的特定补丁中处理,此处不需要重复
-        
-        # 修复 kernel_umount.c 的 path_umount 调用
-        if [ -f "drivers/kernelsu/kernel_umount.c" ]; then
-          echo "修复 kernel_umount.c path_umount..."
-          sed -i 's/path_umount/\/\/ path_umount \/\/ Disabled/g' drivers/kernelsu/kernel_umount.c
-        fi
-        
-        # 修复 su_mount_ns.c 的 path_mount 调用
-        if [ -f "drivers/kernelsu/su_mount_ns.c" ]; then
-          echo "修复 su_mount_ns.c path_mount..."
-          sed -i 's/path_mount/\/\/ path_mount \/\/ Disabled/g' drivers/kernelsu/su_mount_ns.c
-        fi
         
         # 修复 manual_su.c 的兼容性问题
         if [ -f "drivers/kernelsu/manual_su.c" ]; then
