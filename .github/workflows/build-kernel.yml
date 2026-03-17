@@ -573,16 +573,14 @@ jobs:
         
         # 强制禁用 CC_WERROR（防止 defconfig 覆盖）
         if [ ${{ env.DISABLE_CC_WERROR }} = true ]; then
-            echo "强制禁用 CONFIG_CC_WERROR..."
-            sed -i 's/CONFIG_CC_WERROR=y/# CONFIG_CC_WERROR is not set/' out/.config
-            grep -q "CONFIG_CC_WERROR" out/.config || echo "# CONFIG_CC_WERROR is not set" >> out/.config
+            EXTRA_KCFLAGS="-Wno-error"
         fi
         
         # 编译内核
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
-            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="$EXTRA_KCFLAGS" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         else
-            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="$EXTRA_KCFLAGS" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         fi
 
     - name: Check a kernel output files
