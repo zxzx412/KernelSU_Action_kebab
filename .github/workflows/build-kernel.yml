@@ -331,12 +331,9 @@ jobs:
         # 修复 su_mount_ns.c 的兼容性问题
         if [ -f "drivers/kernelsu/su_mount_ns.c" ]; then
           echo "修复 su_mount_ns.c..."
-          # 替换 uapi/linux/mount.h 为老内核的头文件路径
-          sed -i 's/#include <uapi\/linux\/mount.h>/#include <linux\/mount.h>/g' drivers/kernelsu/su_mount_ns.c
-          # 替换 TWA_RESUME 为老内核兼容的值 (true)
-          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/su_mount_ns.c
-          # 替换 ksu_mnt_ns_individual 函数为存根(老内核不支持 path_mount)
-          sed -i '/^static int ksu_mnt_ns_individual(/,/^}/c\static int ksu_mnt_ns_individual(void) { \/\/ Stub for old kernel\n\tpr_info("KernelSU: individual mount ns disabled on old kernel\\n");\n\treturn 0;\n}' drivers/kernelsu/su_mount_ns.c
+          echo '// Stub for old kernel - path_mount not available' > drivers/kernelsu/su_mount_ns.c
+          echo '#include <linux/printk.h>' >> drivers/kernelsu/su_mount_ns.c
+          echo 'static int ksu_mnt_ns_individual(void) { pr_info("KernelSU: mount ns disabled\\n"); return 0; }' >> drivers/kernelsu/su_mount_ns.c
         fi
         
         # 修复 ksud.c 的兼容性问题
