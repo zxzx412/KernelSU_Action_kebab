@@ -582,7 +582,11 @@ jobs:
             echo "禁用编译器 -Werror 标志..."
             EXTRA_KCFLAGS="-Wno-error"
             sed -i 's/CONFIG_CC_WERROR=y/# CONFIG_CC_WERROR is not set/' out/.config
-            sed -i 's/subdir-ccflags-y += -Werror/# subdir-ccflags-y += -Werror/' out/.config 2>/dev/null || true
+            
+            # 移除所有 Makefile 中的 -Werror 标志
+            echo "移除内核源码 Makefile 中的 -Werror..."
+            find drivers/oneplus -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} \; 2>/dev/null || true
+            find . -path ./out -prune -o -type f -name "Makefile" -exec sed -i 's/subdir-ccflags-y.*-Werror/# &/g' {} \; 2>/dev/null || true
         fi
         
         # 编译内核
