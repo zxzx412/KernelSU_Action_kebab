@@ -333,7 +333,10 @@ jobs:
           echo "修复 su_mount_ns.c..."
           echo '// Stub for old kernel - path_mount not available' > drivers/kernelsu/su_mount_ns.c
           echo '#include <linux/printk.h>' >> drivers/kernelsu/su_mount_ns.c
+          echo '#include <linux/nsproxy.h>' >> drivers/kernelsu/su_mount_ns.c
+          echo '#include <linux/mnt_namespace.h>' >> drivers/kernelsu/su_mount_ns.c
           echo 'static int ksu_mnt_ns_individual(void) { pr_info("KernelSU: mount ns disabled\\n"); return 0; }' >> drivers/kernelsu/su_mount_ns.c
+          echo 'int setup_mount_ns(const char *mnt_ns, const char *profile_name) { pr_info("KernelSU: setup_mount_ns disabled\\n"); return 0; }' >> drivers/kernelsu/su_mount_ns.c
         fi
         
         # 修复 ksud.c 的兼容性问题
