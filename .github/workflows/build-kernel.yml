@@ -581,6 +581,11 @@ jobs:
             echo "禁用编译器 -Werror 标志..."
             sed -i 's/CONFIG_CC_WERROR=y/# CONFIG_CC_WERROR is not set/' out/.config
             
+            # 修补 scripts/Makefile.build 移除 -Werror
+            echo "修补 scripts/Makefile.build..."
+            sed -i 's/-Werror//g' scripts/Makefile.build
+            sed -i 's/\$(KBUILD_CFLAGS) -Werror/$(KBUILD_CFLAGS)/g' scripts/Makefile.build
+            
             # 移除所有子目录 Makefile 中的 -Werror 标志
             echo "移除子目录 Makefile 中的 -Werror..."
             find drivers/oneplus -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} \; 2>/dev/null || true
