@@ -419,11 +419,7 @@ jobs:
           echo 'void apply_kernelsu_rules(void) { pr_info("KernelSU: rules disabled\\n"); }' >> drivers/kernelsu/selinux/rules.c
         fi
         
-        # 修复 app_profile.c 的 seccomp_filter_release 调用
-        if [ -f "drivers/kernelsu/app_profile.c" ]; then
-          echo "修复 app_profile.c seccomp 调用..."
-          sed -i 's/seccomp_filter_release/\/\/ seccomp_filter_release \/\/ Disabled/g' drivers/kernelsu/app_profile.c
-        fi
+        # app_profile.c 的 seccomp_filter_release 已在上面的特定补丁中处理,此处不需要重复
         
         # 修复 kernel_umount.c 的 path_umount 调用
         if [ -f "drivers/kernelsu/kernel_umount.c" ]; then
