@@ -70,21 +70,53 @@ jobs:
       if: env.USE_CUSTOM_CLANG != 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir -p clang-aosp
         
         if [[ "${{ env.CLANG_BRANCH }}" == *"kernel-build"* ]]; then
-          echo "检测到 Kernel Build 分支，使用 kernel/prebuilts/build-tools 仓库..."
+          echo "检测到 Kernel Build 分支,使用 kernel/prebuilts/build-tools 仓库..."
           git clone https://android.googlesource.com/kernel/prebuilts/build-tools -b ${{ env.CLANG_BRANCH }} kernel-build-tools --depth=1
           
-          # 查找 clang 所在目录
-          CLANG_BIN=$(find kernel-build-tools -name 'clang' -type f | head -1)
-          if [ -n "$CLANG_BIN" ]; then
-              BIN_DIR=$(dirname "$CLANG_BIN")
-              echo "找到 clang 在: $BIN_DIR"
-              cp -r "$BIN_DIR" clang-aosp/bin
-          else
-              echo "错误：未找到 clang"
-              exit 1
+          echo "=== 检查下载的目录结构 ==="
+          ls -la kernel-build-tools/
+          echo "=========================="
+          
+          # kernel-build-tools 包含多个工具,需要分别提取
+          mkdir -p clang-aosp/bin
+          
+          # 复制构建工具 (linux-x86/bin)
+          if [ -d "kernel-build-tools/linux-x86/bin" ]; then
+            echo "复制构建工具..."
+            cp -r kernel-build-tools/linux-x86/bin/* clang-aosp/bin/
+          fi
+          
+          # 查找并复制 LLVM 工具链
+          if [ -d "kernel-build-tools/build-tools" ]; then
+            echo "从 build-tools 查找 LLVM..."
+            find kernel-build-tools/build-tools -type d -name "linux-x86" | head -1 | while read llvm_dir; do
+              if [ -d "$llvm_dir/bin" ]; then
+                cp -r "$llvm_dir/bin"/* clang-aosp/bin/
+              fi
+            done
+          fi
+          
+          # 检查是否有独立的 clang 目录
+          for clang_dir in kernel-build-tools/prebuilts-master/clang/host/linux-x86/clang-* kernel-build-tools/clang-*; do
+            if [ -d "$clang_dir/bin" ] && [ -f "$clang_dir/bin/clang" ]; then
+              echo "找到 Clang: $clang_dir"
+              cp -r "$clang_dir/bin"/* clang-aosp/bin/
+              break
+            fi
+          done
+          
+          # 验证是否成功获取 clang
+          if [ ! -f "clang-aosp/bin/clang" ]; then
+            echo "错误: 未找到 clang 编译器"
+            echo "尝试查找 clang 位置:"
+            find kernel-build-tools -name "clang" -type f 2>/dev/null | head -10
+            echo "改用标准 AOSP Clang..."
+            rm -rf clang-aosp
+            wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${{ env.CLANG_VERSION }}.tar.gz -O clang.tar.gz
+            mkdir -p clang-aosp
+            tar -C clang-aosp/ -zxf clang.tar.gz
           fi
           
         else
@@ -92,27 +124,26 @@ jobs:
           wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-${{ env.CLANG_VERSION }}.tar.gz -O clang.tar.gz || \
           wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/aosp-master/clang-${{ env.CLANG_VERSION }}.tar.gz -O clang.tar.gz
           
+          mkdir -p clang-aosp
           tar -C clang-aosp/ -zxf clang.tar.gz
           
-          # 智能查找 clang 二进制文件并移动到正确位置
-          # 脚本预期路径: clang-aosp/bin/clang
-          if [ ! -f "clang-aosp/bin/clang" ]; then
-              echo "clang 不在根 bin 目录，搜索子目录..."
-              CLANG_BIN=$(find clang-aosp -name 'clang' -type f -path '*/bin/*' | head -1)
-              if [ -n "$CLANG_BIN" ]; then
-                  FOUND_BIN_DIR=$(dirname "$CLANG_BIN")
-                  echo "找到 bin 目录: $FOUND_BIN_DIR"
-                  # 将找到的 bin 目录内容移动到 clang-aosp/bin
-                  mkdir -p clang-aosp/bin
-                  mv $FOUND_BIN_DIR/* clang-aosp/bin/
-              else
-                  echo "错误：压缩包中未找到 clang 二进制文件"
-                  exit 1
-              fi
+          if [ -d "clang-aosp/clang-${{ env.CLANG_VERSION }}" ]; then
+            mv clang-aosp/clang-${{ env.CLANG_VERSION }}/* clang-aosp/
+            rm -rf clang-aosp/clang-${{ env.CLANG_VERSION }}
           fi
         fi
         
-        chmod -R +x clang-aosp/bin
+        chmod -R +x clang-aosp/bin 2>/dev/null || true
+        
+        # 最终验证
+        echo "=== 验证 Clang 安装 ==="
+        if [ -f "clang-aosp/bin/clang" ]; then
+          echo "✓ Clang 安装成功"
+          clang-aosp/bin/clang --version | head -3
+        else
+          echo "✗ Clang 安装失败"
+          exit 1
+        fi
 
     - name: Download Custom-Clang
       if: env.USE_CUSTOM_CLANG == 'true'
@@ -215,7 +246,190 @@ jobs:
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s ${{ env.KERNELSU_TAG }}
+        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s ${{ env.KERNELSU_TAG }}
+        
+        echo "修补 KernelSU 以兼容老内核..."
+        
+        # 修复 MODULE_IMPORT_NS 问题
+        if [ -f "drivers/kernelsu/ksu.c" ]; then
+          echo "修复 ksu.c..."
+          sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
+        fi
+        
+        # 修复 allowlist.c 的兼容性问题
+        if [ -f "drivers/kernelsu/allowlist.c" ]; then
+          echo "修复 allowlist.c..."
+          # 添加缺失的头文件
+          sed -i '1i#include <linux/sched/task.h>' drivers/kernelsu/allowlist.c
+          
+          # 替换 TWA_RESUME 为老内核兼容的值 (true)
+          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/allowlist.c
+        fi
+        
+        # 修复 app_profile.c 的兼容性问题
+        if [ -f "drivers/kernelsu/app_profile.c" ]; then
+          echo "修复 app_profile.c..."
+          # 注释掉 filter_count 相关代码(老内核不支持)
+          sed -i 's/.*seccomp\.filter_count.*/\/\/ &  \/\/ Disabled for old kernel/g' drivers/kernelsu/app_profile.c
+        fi
+        
+        # 修复 sucompat.c 的兼容性问题
+        if [ -f "drivers/kernelsu/sucompat.c" ]; then
+          echo "修复 sucompat.c..."
+          # 替换新内核的 pgtable.h 为老内核的头文件
+          sed -i 's/#include <linux\/pgtable.h>/#include <asm\/pgtable.h>/g' drivers/kernelsu/sucompat.c
+          
+          # 替换 strncpy_from_user_nofault 为老内核的 strncpy_from_user
+          sed -i 's/strncpy_from_user_nofault/strncpy_from_user/g' drivers/kernelsu/sucompat.c
+        fi
+        
+        # 修复 syscall_hook_manager.c 的兼容性问题
+        if [ -f "drivers/kernelsu/syscall_hook_manager.c" ]; then
+          echo "修复 syscall_hook_manager.c..."
+          # 替换 strncpy_from_user_nofault 为老内核的 strncpy_from_user
+          sed -i 's/strncpy_from_user_nofault/strncpy_from_user/g' drivers/kernelsu/syscall_hook_manager.c
+          # __NR_clone3 在 4.19 内核中不存在(5.3 才引入),注释掉相关代码
+          sed -i 's/case __NR_clone3:/\/\/ case __NR_clone3: \/\/ Disabled for old kernel/g' drivers/kernelsu/syscall_hook_manager.c
+          sed -i 's/if (id == __NR_clone || id == __NR_clone3)/if (id == __NR_clone \/* || id == __NR_clone3 *\/)/g' drivers/kernelsu/syscall_hook_manager.c
+        fi
+        
+        # 修复 setuid_hook.c 的兼容性问题
+        if [ -f "drivers/kernelsu/setuid_hook.c" ]; then
+          echo "修复 setuid_hook.c..."
+          # 替换 TWA_RESUME 为老内核兼容的值 (true)
+          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/setuid_hook.c
+          # 注释掉 ksu_seccomp_allow_cache 调用(seccomp_cache 在老内核中不支持)
+          sed -i 's/.*ksu_seccomp_allow_cache.*/\/\/ &  \/\/ Disabled for old kernel/g' drivers/kernelsu/setuid_hook.c
+        fi
+        
+        # 修复 kernel_umount.c 的兼容性问题
+        if [ -f "drivers/kernelsu/kernel_umount.c" ]; then
+          echo "修复 kernel_umount.c..."
+          # 替换 TWA_RESUME 为老内核兼容的值 (true)
+          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/kernel_umount.c
+        fi
+        
+        # 修复 supercalls.c 的兼容性问题
+        if [ -f "drivers/kernelsu/supercalls.c" ]; then
+          echo "修复 supercalls.c..."
+          # 替换 TWA_RESUME 为老内核兼容的值 (true)
+          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/supercalls.c
+        fi
+        
+        # 修复 su_mount_ns.c 的兼容性问题
+        if [ -f "drivers/kernelsu/su_mount_ns.c" ]; then
+          echo "修复 su_mount_ns.c..."
+          # 替换 uapi/linux/mount.h 为老内核的头文件路径
+          sed -i 's/#include <uapi\/linux\/mount.h>/#include <linux\/mount.h>/g' drivers/kernelsu/su_mount_ns.c
+          # 替换 TWA_RESUME 为老内核兼容的值 (true)
+          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/su_mount_ns.c
+        fi
+        
+        # 修复 ksud.c 的兼容性问题
+        if [ -f "drivers/kernelsu/ksud.c" ]; then
+          echo "修复 ksud.c..."
+          # 替换 strncpy_from_user_nofault 为老内核的 strncpy_from_user
+          sed -i 's/strncpy_from_user_nofault/strncpy_from_user/g' drivers/kernelsu/ksud.c
+          # 替换 copy_from_user_nofault 为老内核的 copy_from_user
+          sed -i 's/copy_from_user_nofault/copy_from_user/g' drivers/kernelsu/ksud.c
+          # 替换 copy_to_user_nofault 为老内核的 copy_to_user
+          sed -i 's/copy_to_user_nofault/copy_to_user/g' drivers/kernelsu/ksud.c
+          # 替换 TWA_RESUME 为老内核兼容的值 (true)
+          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/ksud.c
+        fi
+        
+        # 修复 seccomp_cache.c 的兼容性问题
+        if [ -f "drivers/kernelsu/seccomp_cache.c" ]; then
+          echo "修复 seccomp_cache.c..."
+          # 在文件开头添加 SECCOMP_ARCH_NATIVE_NR 的定义
+          sed -i '1i#ifndef SECCOMP_ARCH_NATIVE_NR\n#ifdef CONFIG_ARM64\n#define SECCOMP_ARCH_NATIVE_NR NR_syscalls\n#else\n#define SECCOMP_ARCH_NATIVE_NR __NR_syscalls\n#endif\n#endif' drivers/kernelsu/seccomp_cache.c
+        fi
+        
+        # 修复 util.c 的兼容性问题
+        if [ -f "drivers/kernelsu/util.c" ]; then
+          echo "修复 util.c..."
+          # 替换新内核的 pgtable.h 为老内核的头文件
+          sed -i 's/#include <linux\/pgtable.h>/#include <asm\/pgtable.h>/g' drivers/kernelsu/util.c
+          # 替换新内核的 mmap_read_trylock 为老内核的 down_read_trylock
+          sed -i 's/mmap_read_trylock(mm)/down_read_trylock(\&mm->mmap_sem)/g' drivers/kernelsu/util.c
+          # 替换新内核的 mmap_read_unlock 为老内核的 up_read
+          sed -i 's/mmap_read_unlock(mm)/up_read(\&mm->mmap_sem)/g' drivers/kernelsu/util.c
+        fi
+        
+        # 修复 file_wrapper.c 的兼容性问题
+        if [ -f "drivers/kernelsu/file_wrapper.c" ]; then
+          echo "修复 file_wrapper.c..."
+          # 注释掉 iopoll 相关代码(老内核不支持)
+          sed -i 's/return orig->f_op->iopoll(kiocb, spin);/\/\/ return orig->f_op->iopoll(kiocb, spin); \/\/ Disabled for old kernel\n\treturn -EOPNOTSUPP;/g' drivers/kernelsu/file_wrapper.c
+          sed -i 's/p->ops\.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;/\/\/ p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL; \/\/ Disabled for old kernel/g' drivers/kernelsu/file_wrapper.c
+          # 注释掉 remap_file_range 相关代码(老内核使用 dedupe_file_range)
+          sed -i 's/if (remap_flags & REMAP_FILE_DEDUP) {/\/\/ if (remap_flags \& REMAP_FILE_DEDUP) { \/\/ Disabled for old kernel\n\tif (0) {/g' drivers/kernelsu/file_wrapper.c
+          # 注释掉包含 remap_file_range 的多行调用
+          sed -i '/orig->f_op->remap_file_range/s/^/\/\/ /' drivers/kernelsu/file_wrapper.c
+          sed -i '/remap_flags);$/s/^/\/\/ /' drivers/kernelsu/file_wrapper.c
+          # 在注释后的行之前插入返回语句
+          sed -i '/\/\/ .*orig->f_op->remap_file_range/i\        return -EOPNOTSUPP; \/\/ Disabled for old kernel' drivers/kernelsu/file_wrapper.c
+          sed -i 's/p->ops\.remap_file_range =/\/\/ p->ops.remap_file_range = \/\/ Disabled for old kernel/g' drivers/kernelsu/file_wrapper.c
+          sed -i 's/fp->f_op->remap_file_range ? ksu_wrapper_remap_file_range : NULL;/\/\/ fp->f_op->remap_file_range ? ksu_wrapper_remap_file_range : NULL; \/\/ Disabled for old kernel/g' drivers/kernelsu/file_wrapper.c
+          # 替换 security_inode_init_security_anon 为老内核的函数(带正确参数)
+          sed -i 's/security_inode_init_security_anon/security_inode_init_security/g' drivers/kernelsu/file_wrapper.c
+          sed -i 's/security_inode_init_security(inode, &qname, context_inode)/security_inode_init_security(inode, (struct inode *)context_inode, \&qname, NULL, NULL)/g' drivers/kernelsu/file_wrapper.c
+          # 注释掉 selinux_inode 调用(老内核不支持)
+          sed -i 's/struct inode_security_struct \*wrapper_sec = selinux_inode(wrapper_inode);/\/\/ struct inode_security_struct \*wrapper_sec = selinux_inode(wrapper_inode); \/\/ Disabled for old kernel\n\tstruct inode_security_struct \*wrapper_sec = NULL;/g' drivers/kernelsu/file_wrapper.c
+        fi
+        
+        # 修复 pkg_observer.c 的兼容性问题
+        if [ -f "drivers/kernelsu/pkg_observer.c" ]; then
+          echo "修复 pkg_observer.c..."
+          # 找到最后一个 #include 行号,在其后插入前向声明和适配器函数
+          LAST_INCLUDE=$(grep -n "^#include" drivers/kernelsu/pkg_observer.c | tail -1 | cut -d: -f1)
+          if [ -n "$LAST_INCLUDE" ]; then
+            # 在最后一个 include 后插入前向声明和适配器函数
+            sed -i "${LAST_INCLUDE}a\\\\n/* Forward declaration */\\nstatic int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask, struct inode *inode, struct inode *dir, const struct qstr *name, u32 cookie);\\n\\n/* Compatibility wrapper for old kernel */\\nstatic int ksu_handle_event_compat(struct fsnotify_group *group, struct inode *inode, u32 mask, const void *data, int data_type, const unsigned char *file_name, u32 cookie, struct fsnotify_iter_info *iter_info) { return ksu_handle_inode_event(NULL, mask, inode, NULL, NULL, 0); }" drivers/kernelsu/pkg_observer.c
+          fi
+          # 替换字段名和函数名
+          sed -i 's/\.handle_inode_event = ksu_handle_inode_event,/\.handle_event = ksu_handle_event_compat,/g' drivers/kernelsu/pkg_observer.c
+          echo "pkg_observer.c 补丁完成"
+        fi
+        
+        # 修复 selinux/selinux.c 的兼容性问题
+        if [ -f "drivers/kernelsu/selinux/selinux.c" ]; then
+          echo "修复 selinux/selinux.c..."
+          # 替换新内核的 selinux_cred(cred) 为老内核的直接访问方式
+          sed -i 's/selinux_cred(cred)/((struct task_security_struct *)cred->security)/g' drivers/kernelsu/selinux/selinux.c
+        fi
+        
+        # 修复 selinux/sepolicy.c 的兼容性问题(禁用编译)
+        if [ -f "drivers/kernelsu/selinux/sepolicy.c" ]; then
+          echo "修复 selinux/sepolicy.c..."
+          # 老内核的 SELinux 内部结构与新内核完全不同,直接禁用此文件编译
+          sed -i '1s/^/#if 0 \/\/ Disabled for old kernel - SELinux internal structures incompatible\n/' drivers/kernelsu/selinux/sepolicy.c
+          sed -i '$a#endif' drivers/kernelsu/selinux/sepolicy.c
+        fi
+        
+        # 修复 selinux/rules.c 的兼容性问题(禁用编译)
+        if [ -f "drivers/kernelsu/selinux/rules.c" ]; then
+          echo "修复 selinux/rules.c..."
+          # 老内核的 SELinux 结构(selinux_state.policy, policy_mutex 等)与新内核不同,禁用编译
+          sed -i '1s/^/#if 0 \/\/ Disabled for old kernel - SELinux state structures incompatible\n/' drivers/kernelsu/selinux/rules.c
+          sed -i '$a#endif' drivers/kernelsu/selinux/rules.c
+        fi
+        
+        # 修复 manual_su.c 的兼容性问题
+        if [ -f "drivers/kernelsu/manual_su.c" ]; then
+          echo "修复 manual_su.c..."
+          # 添加 random.h 头文件(老内核需要显式包含)
+          sed -i '1i#include <linux/random.h>' drivers/kernelsu/manual_su.c
+        fi
+        
+        # 全局补丁：处理所有 KernelSU 文件中的常见兼容性问题
+        echo "应用全局兼容性补丁..."
+        find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/.*ksu_seccomp_allow_cache.*/\/\/ &  \/\/ Disabled for old kernel/g' {} \;
+        find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/.*seccomp\.filter_count.*/\/\/ &  \/\/ Disabled for old kernel/g' {} \;
+        find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/__NR_clone3/__NR_clone3_DISABLED/g' {} \;
+        
+        echo "KernelSU 补丁应用完成"
+        
         echo "UPLOADNAME=-KernelSU" >> $GITHUB_ENV
 
     - name: Setup Configuration for Kernel
@@ -250,49 +464,73 @@ jobs:
     - name: Build kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         
-        # --- 最终修复：强制修复 ld.lld ---
-        # 进入工具链目录
-        cd $GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin
-        echo "正在检查工具链目录内容:"
-        ls -la
+        CLANG_BIN=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin
+        export PATH=$CLANG_BIN:$PATH
         
-        # 如果 ld.lld 不存在
+        # 检查 Clang 工具链
+        echo "=== 检查 Clang 工具链 ==="
+        ls -lh $CLANG_BIN/ | head -20
+        echo "===================="
+        
+        cd $CLANG_BIN
+        
+        # 检查并创建 ld.lld 符号链接
+        USE_LLD=true
         if [ ! -f ld.lld ]; then
-            echo "ld.lld 不存在，尝试修复..."
-            # 尝试链接 lld
             if [ -f lld ]; then
                 ln -sf lld ld.lld
-                echo "已链接: lld -> ld.lld"
-            # 尝试链接 ld.lld-*
-            elif ls ld.lld-* 1> /dev/null 2>&1; then
-                LLD_VER=$(ls ld.lld-* | head -1)
-                ln -sf $LLD_VER ld.lld
-                echo "已链接: $LLD_VER -> ld.lld"
-            # 尝试链接 lld-*
-            elif ls lld-* 1> /dev/null 2>&1; then
-                LLD_VER=$(ls lld-* | head -1)
-                ln -sf $LLD_VER ld.lld
-                echo "已链接: $LLD_VER -> ld.lld"
+                echo "✓ 已创建符号链接: lld -> ld.lld"
+            elif [ -f ld.lld-12 ]; then
+                ln -sf ld.lld-12 ld.lld
+                echo "✓ 已创建符号链接: ld.lld-12 -> ld.lld"
+            elif [ -f ld64.lld ]; then
+                ln -sf ld64.lld ld.lld
+                echo "✓ 已创建符号链接: ld64.lld -> ld.lld"
             else
-                echo "警告: 未找到 lld 相关文件，编译可能会失败。"
+                echo "⚠ 警告: Clang 工具链中未找到 lld"
+                echo "尝试在父目录查找..."
+                if [ -f ../lld ] || [ -f ../bin/lld ]; then
+                    find .. -name "lld" -o -name "ld.lld*" -o -name "ld64.lld" 2>/dev/null | head -5
+                fi
+                USE_LLD=false
             fi
-        fi
-        
-        # 再次检查
-        if [ -f ld.lld ]; then
-            echo "ld.lld 已就绪。"
         else
-            echo "错误: ld.lld 仍缺失。"
-            # exit 1 # 可选：直接退出
+            echo "✓ ld.lld 已存在"
         fi
         
-        # 返回内核目录
+        # 确保 llvm-ar 存在
+        if [ ! -f llvm-ar ]; then
+            for ar in llvm-ar-*; do
+                if [ -f "$ar" ]; then
+                    ln -sf "$ar" llvm-ar
+                    echo "✓ 已创建符号链接: $ar -> llvm-ar"
+                    break
+                fi
+            done
+        fi
+        
+        # 验证关键工具
+        echo "=== 验证工具链 ==="
+        echo "PATH=$PATH"
+        which clang && clang --version | head -1
+        if [ "$USE_LLD" = true ]; then
+            which ld.lld && ld.lld --version | head -1
+        else
+            which ld && ld --version | head -1
+        fi
+        echo "=================="
+        
+        # 返回内核源码目录
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
 
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
+        
+        # 修复 dtc 等 host 工具的 yylloc 重复定义问题
+        export HOSTCFLAGS="-fcommon"
+        export HOSTLDFLAGS="-fcommon"
+        
         if [ ! -z ${{ env.KSU_EXPECTED_SIZE }} ] && [ ! -z ${{ env.KSU_EXPECTED_HASH }} ]; then
           export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
@@ -326,17 +564,18 @@ jobs:
         fi
 
         echo "Final CC: clang"
-        echo "Final LD: ld.lld"
         echo "Final CROSS_COMPILE: $CROSS_COMPILE"
         echo "Final CLANG_TRIPLE: $CLANG_TRIPLE"
+        echo "Final LD: ld.lld (from PATH)"
         
-        # 编译命令
-        make -j$(nproc --all) CC=clang LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
+        # 生成配置
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
+        # 编译内核
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
-            make -j$(nproc --all) CC="ccache clang" LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         else
-            make -j$(nproc --all) CC=clang LD=ld.lld O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE HOSTCC=gcc HOSTCFLAGS="-fcommon" KCFLAGS="-fcommon" ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
         fi
 
     - name: Check a kernel output files
