@@ -583,8 +583,13 @@ jobs:
             EXTRA_KCFLAGS="-Wno-error"
             sed -i 's/CONFIG_CC_WERROR=y/# CONFIG_CC_WERROR is not set/' out/.config
             
-            # 移除所有 Makefile 中的 -Werror 标志
-            echo "移除内核源码 Makefile 中的 -Werror..."
+            # 在顶层 Makefile 中全局禁用 -Werror
+            echo "在顶层 Makefile 中全局禁用 -Werror..."
+            sed -i 's/KBUILD_CFLAGS.*-Werror/& -Wno-error/g' Makefile
+            sed -i '/^KBUILD_CFLAGS/a KBUILD_CFLAGS += -Wno-error' Makefile
+            
+            # 移除所有子目录 Makefile 中的 -Werror 标志
+            echo "移除子目录 Makefile 中的 -Werror..."
             find drivers/oneplus -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} \; 2>/dev/null || true
             find . -path ./out -prune -o -type f -name "Makefile" -exec sed -i 's/subdir-ccflags-y.*-Werror/# &/g' {} \; 2>/dev/null || true
         fi
