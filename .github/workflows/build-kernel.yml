@@ -430,7 +430,16 @@ jobs:
         
         echo "KernelSU 补丁应用完成"
         
-        # 修复一加内核源码的 -Werror 问题
+        # 修复一加内核源码的兼容性问题
+        echo "修复一加内核源码..."
+        
+        # 修复 memplus_core.c 的老式函数定义
+        if [ -f "drivers/oneplus/coretech/memplus/core/memplus_core.c" ]; then
+          echo "修复 memplus_core.c 老式函数定义..."
+          sed -i 's/bool ctech_current_is_swapind()/bool ctech_current_is_swapind(void)/g' drivers/oneplus/coretech/memplus/core/memplus_core.c
+        fi
+        
+        # 移除一加内核 Makefile 中的 -Werror 标志
         echo "移除一加内核 Makefile 中的 -Werror 标志..."
         find drivers/oneplus -name "Makefile" -exec sed -i 's/-Werror//g' {} \; 2>/dev/null || true
         find drivers/oneplus -name "Kbuild" -exec sed -i 's/-Werror//g' {} \; 2>/dev/null || true
