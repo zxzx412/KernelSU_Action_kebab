@@ -572,8 +572,12 @@ jobs:
         make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
         
         # 强制禁用 CC_WERROR（防止 defconfig 覆盖）
+        EXTRA_KCFLAGS=""
         if [ ${{ env.DISABLE_CC_WERROR }} = true ]; then
+            echo "禁用编译器 -Werror 标志..."
             EXTRA_KCFLAGS="-Wno-error"
+            sed -i 's/CONFIG_CC_WERROR=y/# CONFIG_CC_WERROR is not set/' out/.config
+            sed -i 's/subdir-ccflags-y += -Werror/# subdir-ccflags-y += -Werror/' out/.config 2>/dev/null || true
         fi
         
         # 编译内核
