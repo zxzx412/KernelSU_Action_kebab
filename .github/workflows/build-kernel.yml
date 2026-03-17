@@ -271,6 +271,8 @@ jobs:
           echo "修复 app_profile.c..."
           # 注释掉 filter_count 相关代码(老内核不支持)
           sed -i 's/.*seccomp\.filter_count.*/\/\/ &  \/\/ Disabled for old kernel/g' drivers/kernelsu/app_profile.c
+          # 注释掉 seccomp_filter_release 调用(只注释函数调用,不破坏函数定义)
+          sed -i 's/\tseccomp_filter_release/\/\/ seccomp_filter_release \/\/ Disabled/g' drivers/kernelsu/app_profile.c
         fi
         
         # 修复 sucompat.c 的兼容性问题
