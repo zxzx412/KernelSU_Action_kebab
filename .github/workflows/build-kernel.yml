@@ -278,8 +278,9 @@ jobs:
           echo "修复 app_profile.c..."
           # 注释掉 filter_count 相关代码(老内核不支持)
           sed -i 's/.*seccomp\.filter_count.*/\/\/ &  \/\/ Disabled for old kernel/g' drivers/kernelsu/app_profile.c
-          # 注释掉 seccomp_filter_release 调用(只注释函数调用,不破坏函数定义)
-          sed -i 's/\tseccomp_filter_release/\/\/ seccomp_filter_release \/\/ Disabled/g' drivers/kernelsu/app_profile.c
+          # 替换 disable_seccomp 和 disable_seccomp_for_task 函数为存根(老内核不支持 seccomp_filter_release)
+          sed -i '/^static void disable_seccomp(void)/,/^}/c\static void disable_seccomp(void) { \/\/ Stub for old kernel\n}' drivers/kernelsu/app_profile.c
+          sed -i '/^static void disable_seccomp_for_task(struct task_struct \*tsk)/,/^}/c\static void disable_seccomp_for_task(struct task_struct *tsk) { \/\/ Stub for old kernel\n}' drivers/kernelsu/app_profile.c
         fi
         
         # 修复 sucompat.c 的兼容性问题
@@ -316,6 +317,8 @@ jobs:
           echo "修复 kernel_umount.c..."
           # 替换 TWA_RESUME 为老内核兼容的值 (true)
           sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/kernel_umount.c
+          # 替换 ksu_umount_mnt 函数为存根(老内核不支持 path_umount)
+          sed -i '/^static void ksu_umount_mnt(struct path \*path, int flags)/,/^}/c\static void ksu_umount_mnt(struct path *path, int flags) { \/\/ Stub for old kernel\n\tpr_info("KernelSU: umount disabled on old kernel\\n");\n}' drivers/kernelsu/kernel_umount.c
         fi
         
         # 修复 supercalls.c 的兼容性问题
@@ -332,6 +335,8 @@ jobs:
           sed -i 's/#include <uapi\/linux\/mount.h>/#include <linux\/mount.h>/g' drivers/kernelsu/su_mount_ns.c
           # 替换 TWA_RESUME 为老内核兼容的值 (true)
           sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/su_mount_ns.c
+          # 替换 path_mount 为存根(老内核不支持 path_mount)
+          sed -i '/^static int path_mount(void)/,/^}/c\static int path_mount(void) { \/\/ Stub for old kernel\n\tpr_info("KernelSU: path_mount disabled on old kernel\\n");\n\treturn 0;\n}' drivers/kernelsu/su_mount_ns.c
         fi
         
         # 修复 ksud.c 的兼容性问题
@@ -557,6 +562,9 @@ jobs:
         # 修复 dtc 等 host 工具的 yylloc 重复定义问题
         export HOSTCFLAGS="-fcommon"
         export HOSTLDFLAGS="-fcommon"
+        
+        # 禁用 stpcpy 内建函数(老内核缺少实现)
+        export KCFLAGS="${KCFLAGS} -fno-builtin-stpcpy"
         
         if [ ! -z ${{ env.KSU_EXPECTED_SIZE }} ] && [ ! -z ${{ env.KSU_EXPECTED_HASH }} ]; then
           export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
