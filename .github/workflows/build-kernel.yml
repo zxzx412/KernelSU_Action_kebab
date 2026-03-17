@@ -411,10 +411,10 @@ jobs:
         # 修复 selinux/sepolicy.c 的兼容性问题(提供存根函数)
         if [ -f "drivers/kernelsu/selinux/sepolicy.c" ]; then
           echo "修复 selinux/sepolicy.c..."
-          # 老内核的 SELinux 结构不兼容,提供存根函数
+          # 老内核的 SELinux 结构不兼容,提供存根函数(匹配头文件签名)
           echo '// Stub for old kernel' > drivers/kernelsu/selinux/sepolicy.c
           echo '#include "selinux.h"' >> drivers/kernelsu/selinux/sepolicy.c
-          echo 'void handle_sepolicy(void *p, int a) { pr_info("KernelSU: sepolicy disabled\\n"); }' >> drivers/kernelsu/selinux/sepolicy.c
+          echo 'int handle_sepolicy(void __user *user_data, u64 data_len) { pr_info("KernelSU: sepolicy disabled\\n"); return 0; }' >> drivers/kernelsu/selinux/sepolicy.c
         fi
         
         # 修复 selinux/rules.c 的兼容性问题(提供存根函数)
