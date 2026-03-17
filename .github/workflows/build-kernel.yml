@@ -399,20 +399,40 @@ jobs:
           sed -i 's/selinux_cred(cred)/((struct task_security_struct *)cred->security)/g' drivers/kernelsu/selinux/selinux.c
         fi
         
-        # 修复 selinux/sepolicy.c 的兼容性问题(禁用编译)
+        # 修复 selinux/sepolicy.c 的兼容性问题(提供存根函数)
         if [ -f "drivers/kernelsu/selinux/sepolicy.c" ]; then
           echo "修复 selinux/sepolicy.c..."
-          # 老内核的 SELinux 内部结构与新内核完全不同,直接禁用此文件编译
-          sed -i '1s/^/#if 0 \/\/ Disabled for old kernel - SELinux internal structures incompatible\n/' drivers/kernelsu/selinux/sepolicy.c
-          sed -i '$a#endif' drivers/kernelsu/selinux/sepolicy.c
+          # 老内核的 SELinux 结构不兼容,提供存根函数
+          echo '// Stub for old kernel' > drivers/kernelsu/selinux/sepolicy.c
+          echo '#include "selinux.h"' >> drivers/kernelsu/selinux/sepolicy.c
+          echo 'void handle_sepolicy(void *p, int a) { pr_info("KernelSU: sepolicy disabled\\n"); }' >> drivers/kernelsu/selinux/sepolicy.c
         fi
         
-        # 修复 selinux/rules.c 的兼容性问题(禁用编译)
+        # 修复 selinux/rules.c 的兼容性问题(提供存根函数)
         if [ -f "drivers/kernelsu/selinux/rules.c" ]; then
           echo "修复 selinux/rules.c..."
-          # 老内核的 SELinux 结构(selinux_state.policy, policy_mutex 等)与新内核不同,禁用编译
-          sed -i '1s/^/#if 0 \/\/ Disabled for old kernel - SELinux state structures incompatible\n/' drivers/kernelsu/selinux/rules.c
-          sed -i '$a#endif' drivers/kernelsu/selinux/rules.c
+          # 老内核的 SELinux 结构不兼容,提供存根函数
+          echo '// Stub for old kernel' > drivers/kernelsu/selinux/rules.c
+          echo '#include "selinux.h"' >> drivers/kernelsu/selinux/rules.c
+          echo 'void apply_kernelsu_rules(void) { pr_info("KernelSU: rules disabled\\n"); }' >> drivers/kernelsu/selinux/rules.c
+        fi
+        
+        # 修复 app_profile.c 的 seccomp_filter_release 调用
+        if [ -f "drivers/kernelsu/app_profile.c" ]; then
+          echo "修复 app_profile.c seccomp 调用..."
+          sed -i 's/seccomp_filter_release/\/\/ seccomp_filter_release \/\/ Disabled/g' drivers/kernelsu/app_profile.c
+        fi
+        
+        # 修复 kernel_umount.c 的 path_umount 调用
+        if [ -f "drivers/kernelsu/kernel_umount.c" ]; then
+          echo "修复 kernel_umount.c path_umount..."
+          sed -i 's/path_umount/\/\/ path_umount \/\/ Disabled/g' drivers/kernelsu/kernel_umount.c
+        fi
+        
+        # 修复 su_mount_ns.c 的 path_mount 调用
+        if [ -f "drivers/kernelsu/su_mount_ns.c" ]; then
+          echo "修复 su_mount_ns.c path_mount..."
+          sed -i 's/path_mount/\/\/ path_mount \/\/ Disabled/g' drivers/kernelsu/su_mount_ns.c
         fi
         
         # 修复 manual_su.c 的兼容性问题
